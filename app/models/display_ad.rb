@@ -1,4 +1,6 @@
 class DisplayAd < ApplicationRecord
+  include Taggable
+  acts_as_taggable_on :tags
   resourcify
 
   ALLOWED_PLACEMENT_AREAS = %w[sidebar_left sidebar_left_2 sidebar_right post_comments].freeze
@@ -7,6 +9,7 @@ class DisplayAd < ApplicationRecord
                                             "Sidebar Right",
                                             "Below the comment section"].freeze
 
+  MAX_TAG_LIST_SIZE = 10
   POST_WIDTH = 775
   SIDEBAR_WIDTH = 350
 
@@ -18,6 +21,7 @@ class DisplayAd < ApplicationRecord
   validates :placement_area, presence: true,
                              inclusion: { in: ALLOWED_PLACEMENT_AREAS }
   validates :body_markdown, presence: true
+  validate :validate_tag
   before_save :process_markdown
   after_save :generate_display_ad_name
 
@@ -28,8 +32,19 @@ class DisplayAd < ApplicationRecord
                              search: "%#{term}%"
                      }
 
-  def self.for_display(area, user_signed_in)
+  def self.for_display(area, user_signed_in, article_tags = [])
     relation = approved_and_published.where(placement_area: area).order(success_rate: :desc)
+
+    if article_tags.any?
+      display_ads_with_no_tags = relation.where(cached_tag_list: "")
+      display_ads_with_targeted_article_tags = relation.cached_tagged_with_any(article_tags)
+
+      relation = display_ads_with_no_tags.or(display_ads_with_targeted_article_tags)
+    end
+
+    if article_tags.blank?
+      relation = relation.where(cached_tag_list: "")
+    end
 
     relation = if user_signed_in
                  relation.where(display_to: %w[all logged_in])
@@ -48,6 +63,13 @@ class DisplayAd < ApplicationRecord
 
   def human_readable_placement_area
     ALLOWED_PLACEMENT_AREAS_HUMAN_READABLE[ALLOWED_PLACEMENT_AREAS.find_index(placement_area)]
+  end
+
+  def validate_tag
+    # check there are not too many tags
+    return errors.add(:tag_list, I18n.t("models.article.too_many_tags")) if tag_list.size > MAX_TAG_LIST_SIZE
+
+    validate_tag_name(tag_list)
   end
 
   private
